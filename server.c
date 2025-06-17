@@ -1,0 +1,274 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <pthread.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <arpa/inet.h>
+#include <ctype.h>
+#include <sys/wait.h>
+
+#define PORT 12345
+#define BACKLOG 10
+#define MAX_FILENAME 256
+#define MAX_FILESIZE (1024 * 1024)
+
+void sanitize_filename(char *filename) {
+    for (int i = 0; filename[i]; ++i) {
+        if (!isalnum(filename[i]) && filename[i] != '.' && filename[i] != '_' && filename[i] != '-') {
+            filename[i] = '_';
+        }
+    }
+}
+
+const char *get_ext(const char *filename) {
+    const char *dot = strrchr(filename, '.');
+    return dot ? dot + 1 : "";
+}
+
+
+int run_command(const char *cmd, const char *outfile) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s > %s.stdout 2> %s.stderr", cmd, outfile, outfile);
+    int ret = system(buf);
+    return WEXITSTATUS(ret);
+}
+
+ssize_t recv_line(int sock, char *buf, size_t maxlen) {
+    size_t i = 0;
+    char c = 0;
+    while (i < maxlen - 1) {
+        ssize_t n = recv(sock, &c, 1, 0);
+        if (n <= 0) return n;
+        buf[i++] = c;
+        if (c == '\n') break;
+    }
+    buf[i] = '\0';
+    return i;
+}
+
+void *handle_client(void *arg) {
+    int client_sock = *(int *)arg;
+    free(arg);
+    printf("[+] Client connected. Socket: %d\n", client_sock);
+
+    char header[512];
+    ssize_t n = recv_line(client_sock, header, sizeof(header));
+    if (n <= 0) {
+        printf("[!] Failed to read header line\n");
+        close(client_sock);
+        return NULL;
+    }
+    printf("[LOG] Received header: %s", header);
+
+    char cmd[16], filename[MAX_FILENAME];
+    int filesize = 0;
+    if (sscanf(header, "%15s %255s %d", cmd, filename, &filesize) != 3 || strcmp(cmd, "UPLOAD") != 0) {
+        printf("[!] Invalid upload command\n");
+        close(client_sock);
+        return NULL;
+    }
+    if (filesize <= 0 || filesize > MAX_FILESIZE) {
+        printf("[!] Invalid file size: %d\n", filesize);
+        close(client_sock);
+        return NULL;
+    }
+    sanitize_filename(filename);
+    printf("[>] Receiving file: %s (%d bytes)\n", filename, filesize);
+
+    char filepath[300];
+    snprintf(filepath, sizeof(filepath), "/tmp/%s", filename);
+    FILE *fp = fopen(filepath, "wb");
+    if (!fp) {
+        printf("[!] Failed to open file for writing\n");
+        close(client_sock);
+        return NULL;
+    }
+    int bytes_left = filesize;
+    char buf[4096];
+    while (bytes_left > 0) {
+        int to_read = bytes_left > sizeof(buf) ? sizeof(buf) : bytes_left;
+        int r = recv(client_sock, buf, to_read, 0);
+        if (r <= 0) {
+            printf("[!] File receive error\n");
+            fclose(fp);
+            close(client_sock);
+            return NULL;
+        }
+        fwrite(buf, 1, r, fp);
+        bytes_left -= r;
+    }
+    fclose(fp);
+    printf("[>] File received and saved to %s\n", filepath);
+
+    char run_cmd[16] = {0};
+    n = recv_line(client_sock, run_cmd, sizeof(run_cmd));
+    if (n <= 0) {
+        printf("[!] Failed to read RUN command\n");
+        close(client_sock);
+        return NULL;
+    }
+    printf("[LOG] Received RUN command: %s", run_cmd);
+    if (strncmp(run_cmd, "RUN", 3) != 0) {
+        printf("[!] Expected RUN command, got: %s\n", run_cmd);
+        close(client_sock);
+        return NULL;
+    }
+    printf("[>] RUN command received.\n");
+
+    const char *ext = get_ext(filename);
+    char compile_cmd[512] = "", exec_cmd[512] = "", resultfile[300];
+    int is_compiled = 0;
+    snprintf(resultfile, sizeof(resultfile), "/tmp/%s.result", filename);
+    int exit_code = 0;
+
+    if (strcmp(ext, "c") == 0) {
+        snprintf(compile_cmd, sizeof(compile_cmd), "gcc %s -o /tmp/%s.bin", filepath, filename);
+        snprintf(exec_cmd, sizeof(exec_cmd), "/tmp/%s.bin", filename);
+        is_compiled = 1;
+    } else if (strcmp(ext, "cpp") == 0) {
+        snprintf(compile_cmd, sizeof(compile_cmd), "g++ %s -o /tmp/%s.bin", filepath, filename);
+        snprintf(exec_cmd, sizeof(exec_cmd), "/tmp/%s.bin", filename);
+        is_compiled = 1;
+    } else if (strcmp(ext, "py") == 0) {
+        snprintf(exec_cmd, sizeof(exec_cmd), "python3 %s", filepath);
+    } else if (strcmp(ext, "java") == 0) {
+        char classname[128] = "";
+        sscanf(filename, "%127[^.]", classname);
+        snprintf(compile_cmd, sizeof(compile_cmd), "javac %s", filepath);
+        snprintf(exec_cmd, sizeof(exec_cmd), "java -cp /tmp %s", classname);
+        is_compiled = 1;
+    } else {
+        printf("[!] Unsupported file extension: %s\n", ext);
+        const char *msg = "ERROR: Unsupported file type\n";
+        send(client_sock, msg, strlen(msg), 0);
+        close(client_sock);
+        return NULL;
+    }
+
+    if (is_compiled) {
+        printf("[>] Compiling: %s\n", compile_cmd);
+        exit_code = run_command(compile_cmd, resultfile);
+        printf("[LOG] Compilation finished with exit code %d\n", exit_code);
+        if (exit_code != 0) {
+            printf("[!] Compilation failed. See result file.\n");
+            goto send_result;
+        }
+    }
+    printf("[>] Executing: %s\n", exec_cmd);
+    exit_code = run_command(exec_cmd, resultfile);
+    printf("[LOG] Execution finished with exit code %d\n", exit_code);
+
+send_result:
+    char stdoutfile[320], stderrfile[320];
+    snprintf(stdoutfile, sizeof(stdoutfile), "%s.stdout", resultfile);
+    snprintf(stderrfile, sizeof(stderrfile), "%s.stderr", resultfile);
+    FILE *rf = fopen(resultfile, "wb");
+    if (!rf) {  
+        printf("[!] Could not open result file for writing\n");
+        close(client_sock);
+        return NULL;
+    }
+    FILE *sf = fopen(stdoutfile, "rb");
+    if (sf) {
+        fprintf(rf, "--- STDOUT ---\n");
+        size_t r;
+        while ((r = fread(buf, 1, sizeof(buf), sf)) > 0) fwrite(buf, 1, r, rf);
+        fclose(sf);
+    } else {
+        fprintf(rf, "--- STDOUT ---\n<none>\n");
+        printf("[LOG] No stdout file found\n");
+    }
+    FILE *ef = fopen(stderrfile, "rb");
+    if (ef) {
+        fprintf(rf, "\n--- STDERR ---\n");
+        size_t r;
+        while ((r = fread(buf, 1, sizeof(buf), ef)) > 0) fwrite(buf, 1, r, rf);
+        fclose(ef);
+    } else {
+        fprintf(rf, "\n--- STDERR ---\n<none>\n");
+        printf("[LOG] No stderr file found\n");
+    }
+    fprintf(rf, "\n--- EXIT CODE ---\n%d\n", exit_code);
+    fclose(rf);
+    printf("[LOG] Result file written: %s\n", resultfile);
+
+    rf = fopen(resultfile, "rb");
+    if (!rf) {
+        printf("[!] Could not open result file for sending\n");
+        close(client_sock);
+        return NULL;
+    }
+    fseek(rf, 0, SEEK_END);
+    long result_size = ftell(rf);
+    fseek(rf, 0, SEEK_SET);
+    printf("[LOG] Sending result file of size %ld\n", result_size);
+    char sizebuf[64];
+    snprintf(sizebuf, sizeof(sizebuf), "%ld\n", result_size);
+    send(client_sock, sizebuf, strlen(sizebuf), 0);
+    while ((n = fread(buf, 1, sizeof(buf), rf)) > 0) {
+        send(client_sock, buf, n, 0);
+    }
+    fclose(rf);
+    printf("[>] Result file sent (%ld bytes)\n", result_size);
+
+    close(client_sock);
+    printf("[-] Client disconnected. Socket: %d\n", client_sock);
+    return NULL;
+}
+
+int main() {
+    int server_sock, *client_sock;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_size = sizeof(struct sockaddr_in);
+    pthread_t tid;
+
+    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    int opt = 1;
+    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+    memset(&(server_addr.sin_zero), '\0', 8);
+
+    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_sock, BACKLOG) < 0) {
+        perror("listen");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[+] Server started on port %d. Waiting for clients...\n", PORT);
+
+    while (1) {
+        client_sock = malloc(sizeof(int));
+        if (!client_sock) {
+            perror("malloc");
+            continue;
+        }
+        *client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &addr_size);
+        if (*client_sock < 0) {
+            perror("accept");
+            free(client_sock);
+            continue;
+        }
+        pthread_create(&tid, NULL, handle_client, client_sock);
+        pthread_detach(tid);
+    }
+
+    close(server_sock);
+    return 0;
+} 
