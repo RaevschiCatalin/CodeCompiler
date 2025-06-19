@@ -220,7 +220,7 @@ send_result:
     return NULL;
 }
 
-int main() {
+int server_main() {
     int server_sock, *client_sock;
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_size = sizeof(struct sockaddr_in);

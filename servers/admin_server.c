@@ -234,7 +234,7 @@ void handle_client(int sockfd) {
     }
 }
 
-int main() {
+int admin_main(){
     struct sockaddr_un addr;
 
     signal(SIGINT, handle_sigint);
