@@ -8,7 +8,6 @@
 #include <time.h>
 #include <signal.h>
 #include <sys/stat.h>
-#include <sys/select.h>
 
 #define SOCKET_PATH "/tmp/admin_socket"
 #define BUFFER_SIZE 1024
@@ -16,7 +15,7 @@
 #define BLOCKED_IP_FILE "/tmp/blocked_ips.txt"
 #define UPLOADS_INFO_FILE "/tmp/uploads_info.txt"
 #define UPLOADS_DIR "/tmp/uploads"
-#define ADMIN_TIMEOUT 300  // 5 minutes timeout for admin inactivity
+#define ADMIN_TIMEOUT 300 // 5 minutes timeout for admin inactivity
 
 int server_sock = -1;
 int client_sock = -1;
@@ -182,6 +181,30 @@ void handle_client(int sockfd) {
     fd_set read_fds;
     struct timeval timeout;
 
+    // --- LOGIN BASIC ---
+    memset(buffer, 0, sizeof(buffer));
+    int bytes_read = read(sockfd, buffer, sizeof(buffer) - 1);
+    if (bytes_read <= 0) {
+        close(sockfd);
+        admin_connected = 0;
+        return;
+    }
+    buffer[bytes_read] = '\0';
+    // buffer conține parola
+    const char *admin_pass = "admin123";
+    if (strcmp(buffer, admin_pass) != 0) {
+        const char *msg = "ERROR: Parola gresita!\n";
+        write(sockfd, msg, strlen(msg));
+        close(sockfd);
+        admin_connected = 0;
+        return;
+    } else {
+        const char *msg = "OK";
+        write(sockfd, msg, strlen(msg));
+    }
+    // --- END LOGIN ---
+
+    // Multiplexare cu select și timeout pentru inactivitate
     while (1) {
         // Check for inactivity timeout
         time_t current_time = time(NULL);
@@ -198,7 +221,6 @@ void handle_client(int sockfd) {
         timeout.tv_usec = 0;
 
         int activity = select(sockfd + 1, &read_fds, NULL, NULL, &timeout);
-        
         if (activity == -1) {
             perror("select");
             log_server_action("Eroare select in handle_client");
@@ -219,6 +241,7 @@ void handle_client(int sockfd) {
             close(sockfd);
             break;
         }
+        buffer[bytes_read] = '\0';
 
         printf("Comanda primita: %s\n", buffer);
         log_server_action("Comanda primita de la admin client");
@@ -286,7 +309,6 @@ void handle_client(int sockfd) {
             char log_msg[BUFFER_SIZE + 50];
             snprintf(log_msg, sizeof(log_msg), "Procesare comanda: BLOCK_IP - Blocare IP: %s", ip_address);
             log_server_action(log_msg);
-            
             FILE *ipfile = fopen(BLOCKED_IP_FILE, "a");
             if (ipfile) {
                 fprintf(ipfile, "%s\n", ip_address);
@@ -319,6 +341,8 @@ void handle_client(int sockfd) {
         } else if (strcmp(buffer, "HEARTBEAT") == 0) {
             log_server_action("Procesare comanda: HEARTBEAT - Ping de la admin client");
             write(sockfd, "OK", strlen("OK"));
+        } else if (strcmp(buffer, "DOWNLOAD_REPORT") == 0) {
+            send_file("raport_primire.xlsx");
         } else {
             write(sockfd, "Comanda necunoscuta.\n", 22);
             log_server_action("Rezultat: Comanda necunoscuta primita");
