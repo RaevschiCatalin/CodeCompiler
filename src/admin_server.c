@@ -177,85 +177,126 @@ void handle_client(int sockfd) {
     admin_connected = 1;
     char buffer[BUFFER_SIZE];
 
+    // --- LOGIN BASIC ---
+    memset(buffer, 0, sizeof(buffer));
+    int bytes_read = read(sockfd, buffer, sizeof(buffer) - 1);
+    if (bytes_read <= 0) {
+        close(sockfd);
+        admin_connected = 0;
+        return;
+    }
+    buffer[bytes_read] = '\0';
+    // buffer conține parola
+    const char *admin_pass = "admin123";
+    if (strcmp(buffer, admin_pass) != 0) {
+        const char *msg = "ERROR: Parola gresita!\n";
+        write(sockfd, msg, strlen(msg));
+        close(sockfd);
+        admin_connected = 0;
+        return;
+    } else {
+        const char *msg = "OK";
+        write(sockfd, msg, strlen(msg));
+    }
+    // --- END LOGIN ---
+
+    // Multiplexare cu select
+    fd_set fds;
+    int maxfd = sockfd;
     while (1) {
-        memset(buffer, 0, sizeof(buffer));
-        int bytes_read = read(sockfd, buffer, sizeof(buffer) - 1);
-        if (bytes_read <= 0) {
-            printf("Client deconectat.\n");
-            close(sockfd);
+        FD_ZERO(&fds);
+        FD_SET(sockfd, &fds);
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        int sel = select(maxfd + 1, &fds, NULL, NULL, &tv);
+        if (sel < 0) {
+            perror("select");
             break;
+        } else if (sel == 0) {
+            continue; // timeout, reluam
         }
+        if (FD_ISSET(sockfd, &fds)) {
+            memset(buffer, 0, sizeof(buffer));
+            int bytes_read = read(sockfd, buffer, sizeof(buffer) - 1);
+            if (bytes_read <= 0) {
+                printf("Client deconectat.\n");
+                close(sockfd);
+                break;
+            }
+            buffer[bytes_read] = '\0';
 
-        printf("Comanda primita: %s\n", buffer);
+            printf("Comanda primita: %s\n", buffer);
 
-        if (strcmp(buffer, "KILL_SERVER") == 0) {
-            FILE *pidf = fopen("/tmp/main_server.pid", "r");
-            if (pidf) {
-                int pid = 0;
-                fscanf(pidf, "%d", &pid);
-                fclose(pidf);
-                if (pid > 0) {
-                    kill(pid, SIGTERM);
-                    write(sockfd, "Main server killed.\n", 20);
+            if (strcmp(buffer, "KILL_SERVER") == 0) {
+                FILE *pidf = fopen("/tmp/main_server.pid", "r");
+                if (pidf) {
+                    int pid = 0;
+                    fscanf(pidf, "%d", &pid);
+                    fclose(pidf);
+                    if (pid > 0) {
+                        kill(pid, SIGTERM);
+                        write(sockfd, "Main server killed.\n", 20);
+                    } else {
+                        write(sockfd, "Main server PID not found.\n", 28);
+                    }
                 } else {
-                    write(sockfd, "Main server PID not found.\n", 28);
+                    write(sockfd, "Main server PID file not found.\n", 33);
                 }
-            } else {
-                write(sockfd, "Main server PID file not found.\n", 33);
-            }
-            log_server_action("KILL_SERVER initiat de Admin");
-            cleanup();
-            exit(0);
-        } else if (strcmp(buffer, "LIST_USERS") == 0) {
-            FILE *fp = fopen("/tmp/connected_clients.txt", "r");
-            if (!fp) {
-                write(sockfd, "No users connected.\n", 21);
-            } else {
-                char line[128];
-                while (fgets(line, sizeof(line), fp)) {
-                    write(sockfd, line, strlen(line));
+                log_server_action("KILL_SERVER initiat de Admin");
+                cleanup();
+                exit(0);
+            } else if (strcmp(buffer, "LIST_USERS") == 0) {
+                FILE *fp = fopen("/tmp/connected_clients.txt", "r");
+                if (!fp) {
+                    write(sockfd, "No users connected.\n", 21);
+                } else {
+                    char line[128];
+                    while (fgets(line, sizeof(line), fp)) {
+                        write(sockfd, line, strlen(line));
+                    }
+                    fclose(fp);
                 }
-                fclose(fp);
+            } else if (strcmp(buffer, "STATUS") == 0) {
+                time_t now = time(NULL);
+                char *timestamp = ctime(&now);
+                timestamp[strlen(timestamp) - 1] = '\0';
+                char response[BUFFER_SIZE];
+                snprintf(response, sizeof(response), "Server functional la %s.", timestamp);
+                write(sockfd, response, strlen(response));
+            } else if (strcmp(buffer, "SHUTDOWN") == 0) {
+                write(sockfd, "SHUTDOWN", strlen("SHUTDOWN"));
+                log_server_action("Shutdown initiat de Admin");
+                cleanup();
+                exit(0);
+            } else if (strcmp(buffer, "LOGOUT") == 0) {
+                write(sockfd, "LOGOUT", strlen("LOGOUT"));
+                close(sockfd);
+                break;
+            } else if (strncmp(buffer, "BLOCK_IP", 8) == 0) {
+                FILE *ipfile = fopen(BLOCKED_IP_FILE, "a");
+                if (ipfile) {
+                    fprintf(ipfile, "%s\n", buffer + 9);
+                    fclose(ipfile);
+                }
+                write(sockfd, "IP blocat.\n", 11);
+            } else if (strcmp(buffer, "GET_LOGS") == 0) {
+                int total = count_lines(LOG_FILE);
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Fisierul log are %d linii. Cate vrei?", total);
+                write(sockfd, msg, strlen(msg));
+                int n = 0;
+                read(sockfd, msg, sizeof(msg));
+                n = atoi(msg);
+                send_last_n_lines(LOG_FILE, n);
+            } else if (strcmp(buffer, "UPLOAD_FILE") == 0) {
+                receive_file(UPLOADS_DIR);
+                write(sockfd, "Fisier uploadat.\n", 17);
+            } else if (strcmp(buffer, "DOWNLOAD_REPORT") == 0) {
+                send_file("raport_primire.xlsx");
+            } else {
+                write(sockfd, "Comanda necunoscuta.\n", 22);
             }
-        } else if (strcmp(buffer, "STATUS") == 0) {
-            time_t now = time(NULL);
-            char *timestamp = ctime(&now);
-            timestamp[strlen(timestamp) - 1] = '\0';
-            char response[BUFFER_SIZE];
-            snprintf(response, sizeof(response), "Server functional la %s.", timestamp);
-            write(sockfd, response, strlen(response));
-        } else if (strcmp(buffer, "SHUTDOWN") == 0) {
-            write(sockfd, "SHUTDOWN", strlen("SHUTDOWN"));
-            log_server_action("Shutdown initiat de Admin");
-            cleanup();
-            exit(0);
-        } else if (strcmp(buffer, "LOGOUT") == 0) {
-            write(sockfd, "LOGOUT", strlen("LOGOUT"));
-            close(sockfd);
-            break;
-        } else if (strncmp(buffer, "BLOCK_IP", 8) == 0) {
-            FILE *ipfile = fopen(BLOCKED_IP_FILE, "a");
-            if (ipfile) {
-                fprintf(ipfile, "%s\n", buffer + 9);
-                fclose(ipfile);
-            }
-            write(sockfd, "IP blocat.\n", 11);
-        } else if (strcmp(buffer, "GET_LOGS") == 0) {
-            int total = count_lines(LOG_FILE);
-            char msg[128];
-            snprintf(msg, sizeof(msg), "Fisierul log are %d linii. Cate vrei?", total);
-            write(sockfd, msg, strlen(msg));
-            int n = 0;
-            read(sockfd, msg, sizeof(msg));
-            n = atoi(msg);
-            send_last_n_lines(LOG_FILE, n);
-        } else if (strcmp(buffer, "UPLOAD_FILE") == 0) {
-            receive_file(UPLOADS_DIR);
-            write(sockfd, "Fisier uploadat.\n", 17);
-        } else if (strcmp(buffer, "DOWNLOAD_REPORT") == 0) {
-            send_file("raport_primire.xlsx");
-        } else {
-            write(sockfd, "Comanda necunoscuta.\n", 22);
         }
     }
     admin_connected = 0;
@@ -306,4 +347,5 @@ int main() {
     cleanup();
     return 0;
 }
+
 
