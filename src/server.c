@@ -21,6 +21,24 @@
 #define MAX_WORKERS 3
 #define MAX_CLIENTS 1024
 
+
+int is_ip_blocked(const char *ip) {
+    FILE *fp = fopen("/tmp/blocked_ips.txt", "r");
+    if (!fp) return 0;
+
+    char line[64];
+    while (fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n")] = 0; 
+	if (strcmp(line, ip) == 0) {
+            fclose(fp);
+            return 1;
+        }
+    }
+    fclose(fp);
+    return 0;
+}
+
+
 typedef struct {
     int client_sock;
     char header[512];
@@ -362,14 +380,39 @@ int main() {
             perror("accept");
             continue;
         }
-        char ipbuf[64];
+	        char ipbuf[64];
         inet_ntop(AF_INET, &client_addr.sin_addr, ipbuf, sizeof(ipbuf));
+
+        // 🔒 verificare dacă IP-ul este blocat
+        FILE *fp = fopen("/tmp/blocked_ips.txt", "r");
+        int is_blocked = 0;
+        if (fp) {
+            char line[64];
+            while (fgets(line, sizeof(line), fp)) {
+                line[strcspn(line, "\n")] = 0;
+                if (strcmp(line, ipbuf) == 0) {
+                    is_blocked = 1;
+                    break;
+                }
+            }
+            fclose(fp);
+        }
+
+        if (is_blocked) {
+            printf("[!] Refused blocked IP: %s\n", ipbuf);
+            const char *msg = "Your IP is blocked.\n";
+            send(client_sock, msg, strlen(msg), 0); // optional
+            close(client_sock);
+            continue;
+        }
+
         update_connected_clients(ipbuf, 1);
         int *sock_ptr = malloc(sizeof(int));
         *sock_ptr = client_sock;
         pthread_create(&tid, NULL, handle_client, sock_ptr);
         pthread_detach(tid);
-    }
+
+   }
     cleanup();
     remove("/tmp/main_server.pid");
     remove("/tmp/connected_clients.txt");
