@@ -124,6 +124,32 @@ int main() {
     printf("Conectat la serverul admin.\n");
     log_message("Conectat la serverul admin.");
 
+    // --- LOGIN BASIC ---
+    char password[128];
+    printf("Introdu parola admin: ");
+    fflush(stdout);
+    if (!fgets(password, sizeof(password), stdin)) {
+        printf("Eroare citire parola.\n");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+    password[strcspn(password, "\n")] = 0;
+    write(sockfd, password, strlen(password));
+    // Asteapta raspuns de la server
+    int n = read(sockfd, buffer, sizeof(buffer) - 1);
+    if (n <= 0) {
+        printf("Serverul nu a raspuns la login.\n");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+    buffer[n] = '\0';
+    if (strncmp(buffer, "OK", 2) != 0) {
+        printf("Autentificare esuata: %s\n", buffer);
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+    // --- END LOGIN ---
+
     while (running) {
         clear_screen();
         print_menu();
@@ -261,4 +287,6 @@ int main() {
 
     return 0;
 }
+
+
 
