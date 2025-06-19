@@ -18,6 +18,7 @@
 
 int server_sock = -1;
 int client_sock = -1;
+int admin_connected = 0;
 
 void cleanup() {
     if (client_sock != -1) close(client_sock);
@@ -167,6 +168,13 @@ void send_last_n_lines(const char *filename, int n) {
 }
 
 void handle_client(int sockfd) {
+    if (admin_connected) {
+        const char *msg = "ERROR: Another admin client is already connected.\n";
+        write(sockfd, msg, strlen(msg));
+        close(sockfd);
+        return;
+    }
+    admin_connected = 1;
     char buffer[BUFFER_SIZE];
 
     while (1) {
@@ -180,7 +188,36 @@ void handle_client(int sockfd) {
 
         printf("Comanda primita: %s\n", buffer);
 
-        if (strcmp(buffer, "STATUS") == 0) {
+        if (strcmp(buffer, "KILL_SERVER") == 0) {
+            FILE *pidf = fopen("/tmp/main_server.pid", "r");
+            if (pidf) {
+                int pid = 0;
+                fscanf(pidf, "%d", &pid);
+                fclose(pidf);
+                if (pid > 0) {
+                    kill(pid, SIGTERM);
+                    write(sockfd, "Main server killed.\n", 20);
+                } else {
+                    write(sockfd, "Main server PID not found.\n", 28);
+                }
+            } else {
+                write(sockfd, "Main server PID file not found.\n", 33);
+            }
+            log_server_action("KILL_SERVER initiat de Admin");
+            cleanup();
+            exit(0);
+        } else if (strcmp(buffer, "LIST_USERS") == 0) {
+            FILE *fp = fopen("/tmp/connected_clients.txt", "r");
+            if (!fp) {
+                write(sockfd, "No users connected.\n", 21);
+            } else {
+                char line[128];
+                while (fgets(line, sizeof(line), fp)) {
+                    write(sockfd, line, strlen(line));
+                }
+                fclose(fp);
+            }
+        } else if (strcmp(buffer, "STATUS") == 0) {
             time_t now = time(NULL);
             char *timestamp = ctime(&now);
             timestamp[strlen(timestamp) - 1] = '\0';
@@ -199,39 +236,29 @@ void handle_client(int sockfd) {
         } else if (strncmp(buffer, "BLOCK_IP", 8) == 0) {
             FILE *ipfile = fopen(BLOCKED_IP_FILE, "a");
             if (ipfile) {
-                time_t now = time(NULL);
-                char *timestamp = ctime(&now);
-                timestamp[strlen(timestamp) - 1] = '\0';
-                fprintf(ipfile, "[%s] %s\n", timestamp, buffer);
+                fprintf(ipfile, "%s\n", buffer + 9);
                 fclose(ipfile);
             }
-            write(sockfd, "IP blocat si salvat.", strlen("IP blocat si salvat."));
-        } else if (strcmp(buffer, "KILL_SERVER") == 0) {
-            write(sockfd, "KILL_SERVER", strlen("KILL_SERVER"));
-            log_server_action("Server killed de Admin");
-            cleanup();
-            exit(0);
+            write(sockfd, "IP blocat.\n", 11);
         } else if (strcmp(buffer, "GET_LOGS") == 0) {
-            int lines = count_lines(LOG_FILE);
-            char info[BUFFER_SIZE];
-            snprintf(info, sizeof(info), "Fisierul log are %d linii. Cate doresti?", lines);
-            write(sockfd, info, strlen(info));
-
-            memset(buffer, 0, sizeof(buffer));
-            if (read(sockfd, buffer, sizeof(buffer) - 1) > 0) {
-                int n = atoi(buffer);
-                send_last_n_lines(LOG_FILE, n);
-            }
+            int total = count_lines(LOG_FILE);
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Fisierul log are %d linii. Cate vrei?", total);
+            write(sockfd, msg, strlen(msg));
+            int n = 0;
+            read(sockfd, msg, sizeof(msg));
+            n = atoi(msg);
+            send_last_n_lines(LOG_FILE, n);
         } else if (strcmp(buffer, "UPLOAD_FILE") == 0) {
             receive_file(UPLOADS_DIR);
-            write(sockfd, "Fisier uploadat cu succes.", strlen("Fisier uploadat cu succes."));
+            write(sockfd, "Fisier uploadat.\n", 17);
         } else if (strcmp(buffer, "DOWNLOAD_REPORT") == 0) {
-            send_file("/tmp/dummy_raport.xlsx");
-            log_server_action("Raport trimis catre client");
+            send_file("raport_primire.xlsx");
         } else {
-            write(sockfd, "Comanda necunoscuta.", strlen("Comanda necunoscuta."));
+            write(sockfd, "Comanda necunoscuta.\n", 22);
         }
     }
+    admin_connected = 0;
 }
 
 int main() {
@@ -247,7 +274,6 @@ int main() {
     memset(&addr, 0, sizeof(struct sockaddr_un));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
-
     unlink(SOCKET_PATH);
 
     if (bind(server_sock, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) == -1) {

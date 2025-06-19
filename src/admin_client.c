@@ -40,6 +40,7 @@ void print_menu() {
     printf("6. GET_LOGS (vezi ultimele linii din log)\n");
     printf("7. UPLOAD_FILE (incarca orice fisier)\n");
     printf("8. DOWNLOAD_REPORT (descarca un raport Excel)\n");
+    printf("9. LIST_USERS (afiseaza clientii conectati)\n");
     printf("-------------------\n");
 }
 
@@ -174,9 +175,30 @@ int main() {
             log_message("Raport primit de la server.");
             sleep(2);
             continue;
+        } else if (strcmp(command, "9") == 0) {
+            strcpy(buffer, "LIST_USERS");
         } else {
             printf("Optiune invalida.\n");
             sleep(2);
+            continue;
+        }
+
+        if (strcmp(command, "9") == 0) {
+            if (write(sockfd, buffer, strlen(buffer)) == -1) {
+                perror("write");
+                break;
+            }
+            log_message(buffer);
+            int n = read(sockfd, buffer, sizeof(buffer) - 1);
+            if (n > 0) {
+                buffer[n] = '\0';
+                printf("\nClienti conectati:\n%s\n", buffer);
+                log_message(buffer);
+            } else {
+                printf("Nu s-au putut obtine clientii conectati.\n");
+            }
+            printf("Apasa Enter pentru a reveni la meniu...");
+            getchar();
             continue;
         }
 
@@ -235,7 +257,7 @@ int main() {
 
     close(sockfd);
     log_message("Client admin inchis.");
-    printf("\nClient inchis.\n");
+    printf("\nClient admin inchis.\n");
 
     return 0;
 }

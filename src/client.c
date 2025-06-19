@@ -55,40 +55,23 @@ int main(int argc, char *argv[]) {
     send(sock, "RUN\n", 4, 0);
     printf("[>] RUN command sent.\n");
 
-    // ============================ modificare Samuel Pop ============================
-    char response[512] = {0};
-    int r = recv(sock, response, sizeof(response) - 1, 0);
-    if (r <= 0) {
-        perror("[!] Failed to receive server response");
+    char response[256] = {0};
+    int r = recv(sock, response, sizeof(response) - 1, MSG_PEEK);
+    if (r > 0 && strncmp(response, "ERROR", 5) == 0) {
+        recv(sock, response, sizeof(response) - 1, 0);
+        printf("[!] Server error: %s\n", response);
         close(sock);
         return 1;
     }
-    response[r] = '\0';
-    if (strncmp(response, "ERROR:", 6) == 0) {
-        printf("[!] Server responded with error: %s", response); // modificare Samuel Pop
-        close(sock);
-        return 1;
-    }
-    // ==============================================================================
 
-    // Dacă nu e eroare, presupunem că e dimensiunea fișierului rezultat
     char sizebuf[64] = {0};
     int idx = 0;
     char c;
-    // Copiem primul caracter deja citit (deja e în `response`)
-    for (idx = 0; idx < sizeof(sizebuf) - 1 && response[idx] != '\0' && response[idx] != '\n'; ++idx) {
-        sizebuf[idx] = response[idx];
+    while (idx < sizeof(sizebuf) - 1) {
+        if (recv(sock, &c, 1, 0) <= 0) { perror("recv"); close(sock); return 1; }
+        if (c == '\n') break;
+        sizebuf[idx++] = c;
     }
-    if (response[idx] == '\n') sizebuf[idx] = '\0';
-    else {
-        while (idx < sizeof(sizebuf) - 1) {
-            if (recv(sock, &c, 1, 0) <= 0) { perror("recv"); close(sock); return 1; }
-            if (c == '\n') break;
-            sizebuf[idx++] = c;
-        }
-        sizebuf[idx] = '\0';
-    }
-
     long result_size = atol(sizebuf);
     printf("[<] Result file size: %ld\n", result_size);
 
@@ -98,7 +81,11 @@ int main(int argc, char *argv[]) {
     while (bytes_left > 0) {
         int to_read = bytes_left > sizeof(buf) ? sizeof(buf) : bytes_left;
         n = recv(sock, buf, to_read, 0);
-        if (n <= 0) { perror("recv result"); break; }
+        if (n == 0) {
+            printf("Server closed the connection.\n");
+            break;
+        }
+        if (n < 0) { perror("recv result"); break; }
         fwrite(buf, 1, n, outf);
         bytes_left -= n;
     }
@@ -109,4 +96,3 @@ int main(int argc, char *argv[]) {
     printf("Disconnected from server\n");
     return 0;
 }
-

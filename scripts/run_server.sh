@@ -4,12 +4,12 @@ echo "Starting servers..."
 
 # Start main server in background
 echo "Starting main server on port 12345..."
-cd servers && ./server &
+bin/server &
 SERVER_PID=$!
 
 # Start admin server in background  
 echo "Starting admin server on unix socket..."
-./admin_server &
+bin/admin_server &
 ADMIN_PID=$!
 
 echo "Both servers started!"
