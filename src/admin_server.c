@@ -351,7 +351,7 @@ void handle_client(int sockfd) {
     admin_connected = 0;
 }
 
-int main() {
+int admin_main(){
     struct sockaddr_un addr;
 
     signal(SIGINT, handle_sigint);
