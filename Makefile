@@ -2,25 +2,36 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -g
-TARGETS = admin_client admin_server client server
+SRCDIR = src
+BINDIR = bin
+
+TARGETS = \
+	$(BINDIR)/server \
+	$(BINDIR)/admin_server \
+	$(BINDIR)/client \
+	$(BINDIR)/admin_client
 
 all: $(TARGETS)
 
-admin_client: admin_client.c
-	$(CC) $(CFLAGS) admin_client.c -o admin_client
+$(BINDIR)/server: $(SRCDIR)/server.c | $(BINDIR)
+	$(CC) $(CFLAGS) -lpthread $< -o $@
 
-admin_server: admin_server.c
-	$(CC) $(CFLAGS) admin_server.c -o admin_server
+$(BINDIR)/admin_server: $(SRCDIR)/admin_server.c | $(BINDIR)
+	$(CC) $(CFLAGS) $< -o $@
 
-server: server.c
-	$(CC) $(CFLAGS) -lpthread server.c -o server
+$(BINDIR)/client: $(SRCDIR)/client.c | $(BINDIR)
+	$(CC) $(CFLAGS) $< -o $@
 
-client: client.c
-	$(CC) $(CFLAGS) client.c -o client
+$(BINDIR)/admin_client: $(SRCDIR)/admin_client.c | $(BINDIR)
+	$(CC) $(CFLAGS) $< -o $@
+
+$(BINDIR):
+	mkdir -p $(BINDIR)
 
 clean:
-	rm -f $(TARGETS) *.o *.log
+	rm -f $(BINDIR)/* *.o *.log
 	rm -rf /tmp/uploads
 	rm -f /tmp/admin_socket
 	rm -f /tmp/admin_server.log /tmp/blocked_ips.txt /tmp/uploads_info.txt /tmp/dummy_raport.xlsx raport_primire.xlsx upload_log_primit.txt
+	rm -f hello.py error.c runtime_error.py sleep_test.py result_hello.txt result_error.txt result_runtime.txt result_sleep1.txt result_sleep2.txt result_sleep3.txt result_sleep4.txt raport_primire.xlsx
 	

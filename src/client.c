@@ -55,7 +55,15 @@ int main(int argc, char *argv[]) {
     send(sock, "RUN\n", 4, 0);
     printf("[>] RUN command sent.\n");
 
-    
+    char response[256] = {0};
+    int r = recv(sock, response, sizeof(response) - 1, MSG_PEEK);
+    if (r > 0 && strncmp(response, "ERROR", 5) == 0) {
+        recv(sock, response, sizeof(response) - 1, 0);
+        printf("[!] Server error: %s\n", response);
+        close(sock);
+        return 1;
+    }
+
     char sizebuf[64] = {0};
     int idx = 0;
     char c;
@@ -73,7 +81,11 @@ int main(int argc, char *argv[]) {
     while (bytes_left > 0) {
         int to_read = bytes_left > sizeof(buf) ? sizeof(buf) : bytes_left;
         n = recv(sock, buf, to_read, 0);
-        if (n <= 0) { perror("recv result"); break; }
+        if (n == 0) {
+            printf("Server closed the connection.\n");
+            break;
+        }
+        if (n < 0) { perror("recv result"); break; }
         fwrite(buf, 1, n, outf);
         bytes_left -= n;
     }
