@@ -5,8 +5,9 @@
 #include <unistd.h>
 
 //  server files
-#include "servers/server.c"
-#include "servers/admin_server.c"
+#include "../src/server.c"
+#include "../src/admin_server.c"
+
 
 pthread_t server_thread;
 pthread_t admin_thread;
