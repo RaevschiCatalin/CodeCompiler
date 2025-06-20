@@ -339,17 +339,8 @@ void *handle_client(void *arg) {
     return NULL;
 }
 
-<<<<<<< HEAD:servers/server.c
 int server_main() {
     int server_sock, *client_sock;
-=======
-int main() {
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
-    FILE *pidf = fopen("/tmp/main_server.pid", "w");
-    if (pidf) { fprintf(pidf, "%d\n", getpid()); fclose(pidf); }
-    int server_sock;
->>>>>>> origin/master:src/server.c
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_size = sizeof(struct sockaddr_in);
     pthread_t tid;
